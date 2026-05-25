@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<errors>
+<errorentry>
+	<datetime>2026-05-25 21:25:16 (UTC)</datetime>
+	<errornum>1024</errornum>
+	<errortype>Пользовательское уведомление</errortype>
+	<errormsg>Неудачная попытка входа: логин «superadmin».</errormsg>
+	<scriptname>/Users/kriserh/Downloads/lab6S/includes/user_auth.php</scriptname>
+	<scriptlinenum>197</scriptlinenum>
+</errorentry>
+
+<errorentry>
+	<datetime>2026-05-25 21:25:37 (UTC)</datetime>
+	<errornum>1024</errornum>
+	<errortype>Пользовательское уведомление</errortype>
+	<errormsg>Неудачная попытка входа: логин «superadmin».</errormsg>
+	<scriptname>/Users/kriserh/Downloads/lab6S/includes/user_auth.php</scriptname>
+	<scriptlinenum>197</scriptlinenum>
+</errorentry>
+
+<errorentry>
+	<datetime>2026-05-25 21:26:18 (UTC)</datetime>
+	<errornum>1024</errornum>
+	<errortype>Пользовательское уведомление</errortype>
+	<errormsg>Неудачная попытка входа: логин «admin».</errormsg>
+	<scriptname>/Users/kriserh/Downloads/lab6S/includes/user_auth.php</scriptname>
+	<scriptlinenum>197</scriptlinenum>
+</errorentry>
+
+<errorentry>
+	<datetime>2026-05-25 22:33:49 (UTC)</datetime>
+	<errornum>1024</errornum>
+	<errortype>Пользовательское уведомление</errortype>
+	<errormsg>Новый пользователь «Vantsev» зарегистрирован.</errormsg>
+	<scriptname>/Users/kriserh/Downloads/lab6S/includes/user_auth.php</scriptname>
+	<scriptlinenum>156</scriptlinenum>
+</errorentry>
+

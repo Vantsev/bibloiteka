@@ -8,11 +8,7 @@ if (is_authorized()) { header("Location: cabinet.php"); exit; }
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $res = login_user($conn, $_POST);
     if ($res['success']) {
-        if (in_array($res['role'], ['admin', 'superadmin'])) {
-            header("Location: admin.php");
-        } else {
-            header("Location: cabinet.php");
-        }
+        header("Location: cabinet.php");
         exit;
     }
     $error = $res['message'];

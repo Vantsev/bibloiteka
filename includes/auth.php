@@ -83,6 +83,15 @@ function ensure_lab4s_tables($conn) {
         $conn->query("ALTER TABLE users ADD COLUMN role ENUM('user','admin','superadmin') NOT NULL DEFAULT 'user'");
     }
 
+    // Добавляем флаг бана
+    $colCheck = $conn->query("SHOW COLUMNS FROM users LIKE 'is_banned'");
+    if ($colCheck && $colCheck->num_rows === 0) {
+        $conn->query("ALTER TABLE users ADD COLUMN is_banned TINYINT(1) NOT NULL DEFAULT 0");
+    }
+
+    // Понижаем обычных админов до пользователей — теперь админ-доступ только у superadmin
+    $conn->query("UPDATE users SET role = 'user' WHERE role = 'admin'");
+
     // Создаём главного админа если нет ни одного superadmin
     $saCheck = $conn->query("SELECT COUNT(*) as c FROM users WHERE role = 'superadmin'");
     $saRow = $saCheck->fetch_assoc();

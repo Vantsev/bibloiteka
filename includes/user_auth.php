@@ -84,28 +84,9 @@ function register_user($conn, $data, $file): array
         return ['success' => false, 'message' => 'Некорректный формат даты.'];
     }
 
-    /* 7. Проверка уникальности */
-    $stmt = $conn->prepare("SELECT id FROM users WHERE login = ? OR email = ?");
-    if (!$stmt) {
-        trigger_error('Ошибка подготовки запроса: ' . $conn->error, E_USER_ERROR);
-        return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
-    }
-    if (!$stmt->bind_param('ss', $login, $email)) {
-        trigger_error('Ошибка связывания параметров: ' . $stmt->error, E_USER_ERROR);
-        $stmt->close();
-        return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
-    }
-    if (!$stmt->execute()) {
-        trigger_error('Ошибка выполнения запроса: ' . $stmt->error, E_USER_ERROR);
-        $stmt->close();
-        return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
-    }
-    if ($stmt->get_result()->num_rows > 0) {
-        $stmt->close();
-        trigger_error("Логин «{$login}» или Email «{$email}» уже заняты.", E_USER_NOTICE);
-        return ['success' => false, 'message' => 'Логин или Email уже заняты.'];
-    }
-    $stmt->close();
+    /* 7. Уникальность логина обеспечивается UNIQUE-индексом БД.
+       При занятом логине INSERT (шаг 9) выбросит исключение, которое
+       перехватывается и передаётся обработчику как критическая ошибка. */
 
     /* 8. Загрузка фото */
     $photoPath = '';
@@ -132,26 +113,30 @@ function register_user($conn, $data, $file): array
         }
     }
 
-    /* 9. Сохранение пользователя */
+    /* 9. Сохранение пользователя.
+       Ошибку БД перехватываем и передаём обработчику как E_USER_ERROR —
+       он выводит блок «Критическая ошибка» и останавливает скрипт.
+       Для занятого логина/email (код 1062 — Duplicate entry) формируем
+       понятное сообщение вместо сырого текста MySQL.
+       @ гасит deprecation-уведомление PHP 8.4+ о передаче E_USER_ERROR. */
     $hash = password_hash($password, PASSWORD_DEFAULT);
-    $stmt = $conn->prepare(
-        "INSERT INTO users (login, password, reg_date, email, photo) VALUES (?, ?, ?, ?, ?)"
-    );
-    if (!$stmt) {
-        trigger_error('Ошибка подготовки запроса: ' . $conn->error, E_USER_ERROR);
-        return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
-    }
-    if (!$stmt->bind_param('sssss', $login, $hash, $reg_date, $email, $photoPath)) {
-        trigger_error('Ошибка связывания параметров: ' . $stmt->error, E_USER_ERROR);
+    try {
+        $stmt = $conn->prepare(
+            "INSERT INTO users (login, password, reg_date, email, photo) VALUES (?, ?, ?, ?, ?)"
+        );
+        $stmt->bind_param('sssss', $login, $hash, $reg_date, $email, $photoPath);
+        $stmt->execute();
         $stmt->close();
+    } catch (mysqli_sql_exception $e) {
+        if ($e->getCode() === 1062) {
+            // Нарушение уникальности — занятый логин или E-mail
+            $dupMsg = "Пользователь с логином «{$login}» уже существует.";
+            @trigger_error($dupMsg, E_USER_ERROR);
+            return ['success' => false, 'message' => $dupMsg];
+        }
+        @trigger_error('Ошибка базы данных (выполнение запроса): ' . $e->getMessage(), E_USER_ERROR);
         return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
     }
-    if (!$stmt->execute()) {
-        trigger_error('Ошибка выполнения запроса: ' . $stmt->error, E_USER_ERROR);
-        $stmt->close();
-        return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
-    }
-    $stmt->close();
 
     trigger_error("Новый пользователь «{$login}» зарегистрирован.", E_USER_NOTICE);
     return ['success' => true, 'message' => 'Регистрация успешна! Теперь вы можете войти.'];
@@ -168,23 +153,27 @@ function login_user($conn, $data): array
     }
 
     $login = trim($data['login']);
-    $stmt = $conn->prepare("SELECT id, login, password, role FROM users WHERE login = ?");
+    $stmt = $conn->prepare("SELECT id, login, password, role, is_banned FROM users WHERE login = ?");
     if (!$stmt) {
-        trigger_error('Ошибка подготовки запроса: ' . $conn->error, E_USER_ERROR);
+        @trigger_error('Ошибка базы данных (подготовка запроса): ' . $conn->error, E_USER_ERROR);
         return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
     }
     if (!$stmt->bind_param('s', $login)) {
-        trigger_error('Ошибка связывания параметров: ' . $stmt->error, E_USER_ERROR);
+        @trigger_error('Ошибка базы данных (связывание параметров): ' . $stmt->error, E_USER_ERROR);
         $stmt->close();
         return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
     }
     if (!$stmt->execute()) {
-        trigger_error('Ошибка выполнения запроса: ' . $stmt->error, E_USER_ERROR);
+        @trigger_error('Ошибка базы данных (выполнение запроса): ' . $stmt->error, E_USER_ERROR);
         $stmt->close();
         return ['success' => false, 'message' => 'Внутренняя ошибка сервера.'];
     }
     $res = $stmt->get_result();
     if ($row = $res->fetch_assoc()) {
+        if (!empty($row['is_banned'])) {
+            $stmt->close();
+            return ['success' => false, 'message' => 'Ваш аккаунт заблокирован.'];
+        }
         if (password_verify($data['password'], $row['password'])) {
             $_SESSION['user_id']    = $row['id'];
             $_SESSION['user_login'] = $row['login'];

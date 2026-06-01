@@ -25,9 +25,6 @@ $userLogin = $_SESSION['user_login'] ?? '';
             <a href="guestbook.php">Отзывы</a>
             <a href="contacts.php">Контакты</a>
             <?php if (!empty($userLogin)): ?>
-                <?php if (in_array($_SESSION['user_role'] ?? '', ['admin', 'superadmin'])): ?>
-                    <a href="admin.php">Админ</a>
-                <?php endif; ?>
                 <a href="cabinet.php">Кабинет</a>
                 <a href="logout.php">Выход (<?php echo htmlspecialchars($userLogin); ?>)</a>
             <?php else: ?>

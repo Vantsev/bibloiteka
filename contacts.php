@@ -3,12 +3,15 @@ $pageTitle = "Контакты - BookHaven";
 require_once "includes/auth.php";
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $to = "admin@bookhaven.example.com";
-    $subject = "Новое сообщение от читателя " . htmlspecialchars($_POST['name']);
-    $message = "Email: " . htmlspecialchars($_POST['email']) . "\n\n" . htmlspecialchars($_POST['message']);
+    $topic   = trim($_POST['subject'] ?? 'Другое');
+    $to      = "admin@bookhaven.example.com";
+    $subject = "[{$topic}] Сообщение от читателя " . htmlspecialchars($_POST['name']);
+    $message = "Тема: " . htmlspecialchars($topic) . "\n"
+             . "Email: " . htmlspecialchars($_POST['email']) . "\n\n"
+             . htmlspecialchars($_POST['message']);
 
     // mail($to, $subject, $message);
-    $success = "Сообщение отправлено! Мы ответим в ближайшее время.";
+    $success = "Сообщение по теме «" . htmlspecialchars($topic) . "» отправлено! Мы ответим в ближайшее время.";
 }
 
 require_once "includes/header.php";
@@ -112,7 +115,7 @@ require_once "includes/header.php";
 
                     <label>Тема</label>
                     <select name="subject">
-                        <option>Вопрос по заказу</option>
+                        <option <?php echo (($_POST['subject'] ?? '') === 'Вопрос по заказу') ? 'selected' : ''; ?>>Вопрос по заказу</option>
                         <option>Предложение по ассортименту</option>
                         <option>Жалоба</option>
                         <option>Сотрудничество</option>

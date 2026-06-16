@@ -17,7 +17,7 @@ if ($addedId > 0) {
     $s->close();
 }
 
-$sql    = "SELECT id, title, author, category, description, isbn, price FROM products WHERE 1=1";
+$sql    = "SELECT id, title, author, category, description, isbn, price, stock FROM products WHERE 1=1";
 $params = []; $types = "";
 if ($q !== '') {
     $sql .= " AND (title LIKE ? OR author LIKE ?)";
@@ -127,12 +127,19 @@ require_once "includes/header.php";
                 <p style="flex-grow: 1; font-size: 12px; line-height: 1.4; margin: 0 0 12px; color: var(--muted);">
                     <?php echo htmlspecialchars($shortDesc); ?>
                 </p>
+                <div style="font-size: 12px; margin-bottom: 8px; <?php echo $p['stock'] > 0 ? 'color:#27ae60;' : 'color:#e74c3c;'; ?>">
+                    <?php echo $p['stock'] > 0 ? 'В наличии: ' . intval($p['stock']) . ' шт.' : 'Нет в наличии'; ?>
+                </div>
                 <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border); padding-top: 10px; margin-top: auto;">
                     <b style="font-size: 16px; color: var(--text); white-space: nowrap;">
                         <?php echo number_format($p['price'], 0, '', ' '); ?> ₽
                     </b>
-                    <a href="add_to_cart.php?id=<?php echo $p['id']; ?>" class="button"
-                       style="white-space: nowrap; padding: 8px 14px; font-size: 13px;">В корзину</a>
+                    <?php if ($p['stock'] > 0): ?>
+                        <a href="add_to_cart.php?id=<?php echo $p['id']; ?>" class="button"
+                           style="white-space: nowrap; padding: 8px 14px; font-size: 13px;">В корзину</a>
+                    <?php else: ?>
+                        <span class="button" style="white-space: nowrap; padding: 8px 14px; font-size: 13px; background: var(--muted); cursor: not-allowed;">Нет в наличии</span>
+                    <?php endif; ?>
                 </div>
             </article>
         <?php endwhile; ?>

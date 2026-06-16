@@ -15,7 +15,16 @@ $msg = '';
 // ---------- ОБРАБОТКА: ЗАКАЗЫ ----------
 if ($tab === 'orders' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['order_id'])) {
     $orderId = intval($_POST['order_id']);
-    if (isset($_POST['delete_item'])) {
+    if (isset($_POST['delete_order'])) {
+        // Удаление всего заказа (order_items удалятся каскадом по FK)
+        $stmt = $conn->prepare("DELETE FROM orders WHERE id = ?");
+        $stmt->bind_param("i", $orderId); $stmt->execute(); $stmt->close();
+        $msg = "Заказ #{$orderId} удалён.";
+    } elseif (isset($_POST['toggle_status'])) {
+        $stmt = $conn->prepare("UPDATE orders SET status = IF(status='new','done','new') WHERE id = ?");
+        $stmt->bind_param("i", $orderId); $stmt->execute(); $stmt->close();
+        $msg = "Статус заказа #{$orderId} изменён.";
+    } elseif (isset($_POST['delete_item'])) {
         $delItem = intval($_POST['delete_item']);
         $stmt = $conn->prepare("DELETE FROM order_items WHERE id = ?");
         $stmt->bind_param("i", $delItem); $stmt->execute(); $stmt->close();
@@ -43,9 +52,10 @@ if ($tab === 'books' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = trim($_POST['description'] ?? '');
         $isbn = trim($_POST['isbn'] ?? '');
         $price = floatval($_POST['price'] ?? 0);
+        $stock = max(0, intval($_POST['stock'] ?? 0));
         if ($title && $author && $category) {
-            $stmt = $conn->prepare("INSERT INTO products (title, author, category, description, isbn, price) VALUES (?, ?, ?, ?, ?, ?)");
-            $stmt->bind_param("sssssd", $title, $author, $category, $description, $isbn, $price);
+            $stmt = $conn->prepare("INSERT INTO products (title, author, category, description, isbn, price, stock) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            $stmt->bind_param("sssssdi", $title, $author, $category, $description, $isbn, $price, $stock);
             $stmt->execute(); $stmt->close();
             $msg = "Книга «{$title}» добавлена.";
         } else { $msg = "Заполните название, автора и жанр."; }
@@ -59,9 +69,10 @@ if ($tab === 'books' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $description = trim($_POST['description'] ?? '');
         $isbn = trim($_POST['isbn'] ?? '');
         $price = floatval($_POST['price'] ?? 0);
+        $stock = max(0, intval($_POST['stock'] ?? 0));
         if ($title && $author && $category && $id > 0) {
-            $stmt = $conn->prepare("UPDATE products SET title=?, author=?, category=?, description=?, isbn=?, price=? WHERE id=?");
-            $stmt->bind_param("sssssdi", $title, $author, $category, $description, $isbn, $price, $id);
+            $stmt = $conn->prepare("UPDATE products SET title=?, author=?, category=?, description=?, isbn=?, price=?, stock=? WHERE id=?");
+            $stmt->bind_param("sssssdii", $title, $author, $category, $description, $isbn, $price, $stock, $id);
             $stmt->execute(); $stmt->close();
             $msg = "Книга обновлена.";
         }
@@ -70,25 +81,37 @@ if ($tab === 'books' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     elseif (isset($_POST['action']) && $_POST['action'] === 'mass_price') {
         $ids = $_POST['book_ids'] ?? [];
         $mode = $_POST['price_mode'] ?? 'set';
-        $value = floatval($_POST['mass_value'] ?? 0);
+        $value = abs(floatval($_POST['mass_value'] ?? 0)); // значение всегда положительное, знак задаёт режим
         $ids = array_filter(array_map('intval', (array)$ids));
-        if (!empty($ids) && $value !== 0.0 || (!empty($ids) && $mode === 'set')) {
+        if (!empty($ids)) {
             $in = implode(',', $ids);
-            if ($mode === 'set') {
-                $stmt = $conn->prepare("UPDATE products SET price = ? WHERE id IN ($in)");
-                $stmt->bind_param("d", $value); $stmt->execute(); $stmt->close();
-            } elseif ($mode === 'percent') {
-                $factor = 1 + ($value / 100);
-                $stmt = $conn->prepare("UPDATE products SET price = ROUND(price * ?, 2) WHERE id IN ($in)");
-                $stmt->bind_param("d", $factor); $stmt->execute(); $stmt->close();
+            $sql = null; $bindVal = $value;
+            switch ($mode) {
+                case 'set':     // установить точную цену
+                    $sql = "UPDATE products SET price = ? WHERE id IN ($in)"; break;
+                case 'inc_rub': // увеличить на N ₽
+                    $sql = "UPDATE products SET price = price + ? WHERE id IN ($in)"; break;
+                case 'dec_rub': // уменьшить на N ₽ (не ниже 0)
+                    $sql = "UPDATE products SET price = GREATEST(0, price - ?) WHERE id IN ($in)"; break;
+                case 'inc_pct': // увеличить на N %
+                    $sql = "UPDATE products SET price = ROUND(price * ?, 2) WHERE id IN ($in)";
+                    $bindVal = 1 + ($value / 100); break;
+                case 'dec_pct': // уменьшить на N %
+                    $sql = "UPDATE products SET price = ROUND(price * ?, 2) WHERE id IN ($in)";
+                    $bindVal = max(0, 1 - ($value / 100)); break;
             }
-            $msg = "Цены обновлены для " . count($ids) . " книг(и).";
-        } else { $msg = "Выберите книги и укажите значение."; }
+            if ($sql) {
+                $stmt = $conn->prepare($sql);
+                $stmt->bind_param("d", $bindVal); $stmt->execute(); $stmt->close();
+                $msg = "Цены обновлены для " . count($ids) . " книг(и).";
+            }
+        } else { $msg = "Выберите книги флажками."; }
     }
 }
-// Удаление книги
-if ($tab === 'books' && isset($_GET['delete'])) {
-    $delId = intval($_GET['delete']);
+// Удаление книги (только POST — защита от случайного удаления по ссылке)
+if ($tab === 'books' && $_SERVER['REQUEST_METHOD'] === 'POST'
+    && ($_POST['action'] ?? '') === 'delete' && isset($_POST['delete_id'])) {
+    $delId = intval($_POST['delete_id']);
     if ($delId > 0) {
         $stmt = $conn->prepare("DELETE FROM products WHERE id = ?");
         $stmt->bind_param("i", $delId); $stmt->execute(); $stmt->close();
@@ -113,11 +136,28 @@ if ($tab === 'users' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $newLogin = trim($_POST['login'] ?? '');
         $newEmail = trim($_POST['email'] ?? '');
         if ($uid > 0 && $newLogin !== '' && filter_var($newEmail, FILTER_VALIDATE_EMAIL)) {
-            $stmt = $conn->prepare("UPDATE users SET login = ?, email = ? WHERE id = ? AND role != 'superadmin'");
-            $stmt->bind_param("ssi", $newLogin, $newEmail, $uid);
-            $stmt->execute(); $stmt->close();
-            $msg = "Данные пользователя обновлены.";
+            try {
+                $stmt = $conn->prepare("UPDATE users SET login = ?, email = ? WHERE id = ? AND role != 'superadmin'");
+                $stmt->bind_param("ssi", $newLogin, $newEmail, $uid);
+                $stmt->execute(); $stmt->close();
+                $msg = "Данные пользователя обновлены.";
+            } catch (mysqli_sql_exception $e) {
+                // Логин уникален: занятое имя не роняет страницу, а даёт понятное сообщение
+                $msg = ($e->getCode() === 1062)
+                    ? "Логин «{$newLogin}» уже занят, выберите другой."
+                    : "Не удалось сохранить: ошибка базы данных.";
+            }
         } else { $msg = "Проверьте логин и корректность email."; }
+    }
+}
+
+// ---------- ОБРАБОТКА: ОТЗЫВЫ ----------
+if ($tab === 'reviews' && $_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_review') {
+    $rid = intval($_POST['review_id'] ?? 0);
+    if ($rid > 0) {
+        $stmt = $conn->prepare("DELETE FROM guestbook WHERE id = ?");
+        $stmt->bind_param("i", $rid); $stmt->execute(); $stmt->close();
+        $msg = "Отзыв удалён.";
     }
 }
 
@@ -179,6 +219,11 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
 .order-details.hidden { display: none; }
 .inline-form { display: inline; margin: 0; }
 .mass-bar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; padding: 14px; background: #fdfaf6; border-radius: 8px; margin-bottom: 14px; }
+.order-status { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; margin-left: 8px; }
+.st-new { background: #e8f4fd; color: #2980b9; }
+.st-done { background: #e9f7ef; color: #27ae60; }
+.stock-low { color: #e67e22; font-weight: bold; }
+.stock-zero { color: #e74c3c; font-weight: bold; }
 </style>
 
 <section class="admin-wrap">
@@ -202,6 +247,7 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
         <a href="admin.php?tab=orders" class="admin-tab <?php echo $tab === 'orders' ? 'active' : ''; ?>">Заказы</a>
         <a href="admin.php?tab=books"  class="admin-tab <?php echo $tab === 'books'  ? 'active' : ''; ?>">Список книг</a>
         <a href="admin.php?tab=users"  class="admin-tab <?php echo $tab === 'users'  ? 'active' : ''; ?>">Пользователи</a>
+        <a href="admin.php?tab=reviews" class="admin-tab <?php echo $tab === 'reviews' ? 'active' : ''; ?>">Отзывы</a>
     </div>
 
     <?php if ($msg): ?>
@@ -214,7 +260,7 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
         $filterDate = trim($_GET['date'] ?? '');
         $filterUser = intval($_GET['user_id'] ?? 0);
 
-        $sql = "SELECT o.id, o.order_date, o.total_price, u.login AS client
+        $sql = "SELECT o.id, o.order_date, o.total_price, o.status, u.login AS client
                 FROM orders o JOIN users u ON o.user_id = u.id WHERE 1=1";
         $params = []; $types = "";
         if ($filterDate !== '') { $sql .= " AND DATE(o.order_date) = ?"; $params[] = $filterDate; $types .= "s"; }
@@ -247,14 +293,26 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
 
     <?php if ($orders->num_rows > 0): ?>
         <?php while ($o = $orders->fetch_assoc()): ?>
+        <?php $isDone = ($o['status'] ?? 'new') === 'done'; ?>
         <div class="order-row">
             <div>
                 <span class="o-client"><?php echo htmlspecialchars($o['client']); ?></span>
                 <span class="o-meta"> &nbsp;•&nbsp; Заказ #<?php echo $o['id']; ?> &nbsp;•&nbsp; <?php echo date('d.m.Y H:i', strtotime($o['order_date'])); ?></span>
+                <span class="order-status <?php echo $isDone ? 'st-done' : 'st-new'; ?>"><?php echo $isDone ? 'Выполнен' : 'Новый'; ?></span>
             </div>
-            <div style="display: flex; align-items: center; gap: 14px;">
-                <strong><?php echo number_format($o['total_price'], 0, '', ' '); ?> ₽</strong>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <strong style="margin-right: 6px;"><?php echo number_format($o['total_price'], 0, '', ' '); ?> ₽</strong>
                 <button type="button" class="button btn-sm btn-blue" onclick="toggleOrder(<?php echo $o['id']; ?>)">Подробнее</button>
+                <form method="POST" class="inline-form">
+                    <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
+                    <input type="hidden" name="toggle_status" value="1">
+                    <button type="submit" class="button btn-sm <?php echo $isDone ? 'btn-gray' : 'btn-green'; ?>"><?php echo $isDone ? 'Вернуть в новые' : 'Выполнен'; ?></button>
+                </form>
+                <form method="POST" class="inline-form">
+                    <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
+                    <input type="hidden" name="delete_order" value="1">
+                    <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Удалить заказ #<?php echo $o['id']; ?> целиком?');">Удалить</button>
+                </form>
             </div>
         </div>
         <div class="order-details hidden" id="order-<?php echo $o['id']; ?>">
@@ -305,7 +363,7 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
         $fAuthor = trim($_GET['f_author'] ?? '');
         $fCategory = trim($_GET['f_category'] ?? '');
 
-        $sql = "SELECT id, title, author, category, description, isbn, price FROM products WHERE 1=1";
+        $sql = "SELECT id, title, author, category, description, isbn, price, stock FROM products WHERE 1=1";
         $params = []; $types = "";
         if ($fTitle !== '')    { $sql .= " AND title LIKE ?";    $params[] = "%$fTitle%";    $types .= "s"; }
         if ($fAuthor !== '')   { $sql .= " AND author LIKE ?";   $params[] = "%$fAuthor%";   $types .= "s"; }
@@ -319,7 +377,7 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
         // данные для формы редактирования
         $book = null;
         if ($editId > 0) {
-            $st = $conn->prepare("SELECT id, title, author, category, description, isbn, price FROM products WHERE id = ?");
+            $st = $conn->prepare("SELECT id, title, author, category, description, isbn, price, stock FROM products WHERE id = ?");
             $st->bind_param("i", $editId); $st->execute();
             $book = $st->get_result()->fetch_assoc(); $st->close();
         }
@@ -336,6 +394,7 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
             <div><label>ISBN</label><input type="text" name="isbn" placeholder="9785171529017"></div>
             <div style="grid-column: 1 / -1;"><label>Описание</label><textarea name="description" rows="2"></textarea></div>
             <div><label>Цена (руб.)</label><input type="number" name="price" step="0.01" min="0" required></div>
+            <div><label>Остаток на складе (шт.)</label><input type="number" name="stock" min="0" value="10"></div>
             <div style="display: flex; align-items: flex-end;"><button type="submit" class="button">Добавить книгу</button></div>
         </form>
     </div>
@@ -353,6 +412,7 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
             <div><label>ISBN</label><input type="text" name="isbn" value="<?php echo htmlspecialchars($book['isbn'] ?? ''); ?>"></div>
             <div style="grid-column: 1 / -1;"><label>Описание</label><textarea name="description" rows="2"><?php echo htmlspecialchars($book['description']); ?></textarea></div>
             <div><label>Цена (руб.)</label><input type="number" name="price" step="0.01" min="0" value="<?php echo $book['price']; ?>" required></div>
+            <div><label>Остаток на складе (шт.)</label><input type="number" name="stock" min="0" value="<?php echo intval($book['stock']); ?>"></div>
             <div style="display: flex; align-items: flex-end; gap: 10px;">
                 <button type="submit" class="button">Сохранить</button>
                 <a href="admin.php?tab=books" class="button btn-gray">Отмена</a>
@@ -383,10 +443,13 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
                     <label>Массовое изменение цены</label>
                     <select name="price_mode" style="width: 220px; margin: 0;">
                         <option value="set">Установить цену (₽)</option>
-                        <option value="percent">Изменить на (%)</option>
+                        <option value="inc_rub">Увеличить на (₽)</option>
+                        <option value="dec_rub">Уменьшить на (₽)</option>
+                        <option value="inc_pct">Увеличить на (%)</option>
+                        <option value="dec_pct">Уменьшить на (%)</option>
                     </select>
                 </div>
-                <div><label>Значение</label><input type="number" name="mass_value" step="0.01" style="width: 130px; margin: 0;" placeholder="напр. 500 или -10"></div>
+                <div><label>Значение</label><input type="number" name="mass_value" step="0.01" min="0" style="width: 130px; margin: 0;" placeholder="напр. 500 или 10"></div>
                 <button type="submit" class="button btn-green btn-sm" onclick="return confirm('Применить к выбранным книгам?');">Применить к выбранным</button>
                 <span style="color: var(--muted); font-size: 12px;">Отметьте книги флажками ниже</span>
             </div>
@@ -394,9 +457,13 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
             <table>
                 <tr>
                     <th style="width: 30px;"><input type="checkbox" id="checkAll" onclick="toggleAll(this)" style="margin: 0; width: auto;"></th>
-                    <th>ID</th><th>Название</th><th>Автор</th><th>Жанр</th><th>ISBN</th><th>Цена</th><th>Действия</th>
+                    <th>ID</th><th>Название</th><th>Автор</th><th>Жанр</th><th>ISBN</th><th>Цена</th><th>Остаток</th><th>Действия</th>
                 </tr>
-                <?php while ($p = $products->fetch_assoc()): ?>
+                <?php $bookIds = []; while ($p = $products->fetch_assoc()):
+                    $bookIds[] = (int)$p['id'];
+                    $st = intval($p['stock']);
+                    $stClass = $st <= 0 ? 'stock-zero' : ($st <= 3 ? 'stock-low' : '');
+                ?>
                 <tr>
                     <td><input type="checkbox" name="book_ids[]" value="<?php echo $p['id']; ?>" class="bookChk" style="margin: 0; width: auto;"></td>
                     <td><?php echo $p['id']; ?></td>
@@ -405,14 +472,23 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
                     <td><span style="background: #f0ebe5; padding: 2px 8px; border-radius: 10px; font-size: 11px;"><?php echo htmlspecialchars($p['category']); ?></span></td>
                     <td style="font-size: 12px; color: var(--muted);"><?php echo htmlspecialchars($p['isbn'] ?? ''); ?></td>
                     <td style="white-space: nowrap;"><?php echo number_format($p['price'], 0, '', ' '); ?> ₽</td>
+                    <td class="<?php echo $stClass; ?>" style="white-space: nowrap;"><?php echo $st > 0 ? $st . ' шт.' : 'нет'; ?></td>
                     <td style="white-space: nowrap;">
                         <a href="admin.php?tab=books&edit_id=<?php echo $p['id']; ?>" class="button btn-sm">Ред.</a>
-                        <a href="admin.php?tab=books&delete=<?php echo $p['id']; ?>" class="button btn-sm btn-danger" onclick="return confirm('Удалить книгу?');">Удалить</a>
+                        <button type="submit" form="del-book-<?php echo $p['id']; ?>" class="button btn-sm btn-danger" onclick="return confirm('Удалить книгу?');">Удалить</button>
                     </td>
                 </tr>
                 <?php endwhile; ?>
             </table>
         </form>
+
+        <?php /* Формы удаления книг — вне массовой формы (вложенные формы недопустимы) */ ?>
+        <?php foreach ($bookIds as $bid): ?>
+        <form id="del-book-<?php echo $bid; ?>" method="POST" style="display:none;">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="delete_id" value="<?php echo $bid; ?>">
+        </form>
+        <?php endforeach; ?>
     </div>
 
     <?php /* ====================== ПОЛЬЗОВАТЕЛИ ====================== */ ?>
@@ -487,6 +563,43 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
             </tr>
             <?php endwhile; ?>
         </table>
+    </div>
+
+    <?php /* ====================== ОТЗЫВЫ ====================== */ ?>
+    <?php elseif ($tab === 'reviews'): ?>
+    <?php
+        $reviews = $conn->query("SELECT g.id, g.author, g.message, g.created_at, p.title AS book_title
+                                 FROM guestbook g LEFT JOIN products p ON g.book_id = p.id
+                                 ORDER BY g.id DESC");
+    ?>
+    <div class="admin-card">
+        <h3>Модерация отзывов</h3>
+        <?php if ($reviews->num_rows > 0): ?>
+        <table>
+            <tr><th>ID</th><th>Автор</th><th>Книга</th><th>Отзыв</th><th>Дата</th><th>Действие</th></tr>
+            <?php while ($r = $reviews->fetch_assoc()): ?>
+            <tr>
+                <td><?php echo $r['id']; ?></td>
+                <td style="font-weight: bold;"><?php echo htmlspecialchars($r['author']); ?></td>
+                <td><?php echo $r['book_title'] ? htmlspecialchars($r['book_title']) : '<span style="color:var(--muted);">о библиотеке</span>'; ?></td>
+                <td><?php echo nl2br(htmlspecialchars(mb_strimwidth($r['message'], 0, 160, '…'))); ?></td>
+                <td style="white-space: nowrap; color: var(--muted); font-size: 12px;"><?php echo date('d.m.Y H:i', strtotime($r['created_at'])); ?></td>
+                <td>
+                    <form method="POST" class="inline-form">
+                        <input type="hidden" name="action" value="delete_review">
+                        <input type="hidden" name="review_id" value="<?php echo $r['id']; ?>">
+                        <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Удалить отзыв?');">Удалить</button>
+                    </form>
+                </td>
+            </tr>
+            <?php endwhile; ?>
+        </table>
+        <?php else: ?>
+            <div style="text-align: center; color: var(--muted); padding: 30px;">
+                <p style="font-size: 40px; margin: 0 0 10px;">💬</p>
+                <p style="margin: 0;">Отзывов пока нет</p>
+            </div>
+        <?php endif; ?>
     </div>
     <?php endif; ?>
 </section>

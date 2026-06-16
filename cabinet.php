@@ -20,6 +20,7 @@ $user = load_user($conn, $uid);
 $editMode    = isset($_GET['edit']);
 $emailInvalid = false;   // флаг для вывода пользовательского предупреждения inline
 $photoWarn    = false;
+$pwdWarn      = '';      // текст предупреждения по смене пароля
 $saved        = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_profile'])) {
@@ -52,15 +53,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_profile'])) {
         $stmt->bind_param("ssi", $newEmail, $photoPath, $uid);
         $stmt->execute();
         $stmt->close();
+
+        // Смена пароля (опционально, если заполнено поле нового пароля)
+        $newPass = $_POST['new_password'] ?? '';
+        $curPass = $_POST['current_password'] ?? '';
+        if ($newPass !== '') {
+            $st = $conn->prepare("SELECT password FROM users WHERE id = ?");
+            $st->bind_param("i", $uid); $st->execute();
+            $hashRow = $st->get_result()->fetch_assoc(); $st->close();
+            if (!password_verify($curPass, $hashRow['password'])) {
+                $pwdWarn = 'Текущий пароль неверён — пароль не изменён.';
+            } elseif (strlen($newPass) < 6) {
+                $pwdWarn = 'Новый пароль должен содержать не менее 6 символов.';
+            } else {
+                $nh = password_hash($newPass, PASSWORD_DEFAULT);
+                $up = $conn->prepare("UPDATE users SET password = ? WHERE id = ?");
+                $up->bind_param("si", $nh, $uid); $up->execute(); $up->close();
+            }
+        }
+
         trigger_error("Пользователь «{$user['login']}» обновил профиль.", E_USER_NOTICE);
         $user = load_user($conn, $uid); // перечитываем свежие данные
-        $saved = true;
-        $editMode = false;
+        if ($pwdWarn === '') {
+            $saved = true;
+            $editMode = false;
+        } else {
+            $editMode = true; // оставляем форму открытой, чтобы показать предупреждение
+        }
     }
 }
 
 $orders = $conn->query("
-    SELECT o.id, o.order_date, o.total_price
+    SELECT o.id, o.order_date, o.total_price, o.status
     FROM orders o
     WHERE o.user_id = $uid
     ORDER BY o.order_date DESC
@@ -153,6 +177,9 @@ require_once "includes/header.php";
             if ($photoWarn) {
                 trigger_error('Аватар: разрешены JPG/PNG/GIF/WEBP до 2 МБ.', E_USER_WARNING);
             }
+            if ($pwdWarn !== '') {
+                trigger_error($pwdWarn, E_USER_WARNING);
+            }
         ?>
         <form method="POST" enctype="multipart/form-data">
             <input type="hidden" name="save_profile" value="1">
@@ -160,6 +187,14 @@ require_once "includes/header.php";
             <input type="text" name="email" value="<?php echo htmlspecialchars($emailInvalid ? ($_POST['email'] ?? '') : $user['email']); ?>">
             <label>Новое фото <small style="color:#888;">(опционально, JPG/PNG/GIF/WEBP до 2 МБ)</small></label>
             <input type="file" name="photo" accept="image/*">
+
+            <hr style="border:none; border-top:1px solid var(--border); margin:16px 0;">
+            <p style="font-size:13px; color:var(--muted); margin:0 0 10px;">Смена пароля (оставьте пустым, если не меняете)</p>
+            <label>Текущий пароль</label>
+            <input type="password" name="current_password" autocomplete="current-password">
+            <label>Новый пароль <small style="color:#888;">(минимум 6 символов)</small></label>
+            <input type="password" name="new_password" autocomplete="new-password">
+
             <div style="display: flex; gap: 10px; margin-top: 8px;">
                 <button type="submit" class="button">Сохранить изменения</button>
                 <a href="cabinet.php" class="button" style="background: var(--muted);">Отмена</a>
@@ -195,7 +230,10 @@ require_once "includes/header.php";
             ?>
                 <div class="order-item">
                     <div class="order-top">
-                        <span class="order-id">Заказ #<?php echo $o['id']; ?></span>
+                        <span class="order-id">Заказ #<?php echo $o['id']; ?>
+                            <?php $isDone = ($o['status'] ?? 'new') === 'done'; ?>
+                            <span style="display:inline-block; padding:2px 10px; border-radius:12px; font-size:11px; font-weight:bold; margin-left:6px; <?php echo $isDone ? 'background:#e9f7ef; color:#27ae60;' : 'background:#e8f4fd; color:#2980b9;'; ?>"><?php echo $isDone ? 'Выполнен' : 'Новый'; ?></span>
+                        </span>
                         <span class="order-date"><?php echo date('d.m.Y H:i', strtotime($o['order_date'])); ?></span>
                     </div>
                     <div class="order-books">

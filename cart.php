@@ -19,14 +19,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $total = 0;
                 $items = [];
+                $sel = $conn->prepare("SELECT title, price, stock FROM products WHERE id = ?");
                 foreach ($_SESSION['cart'] as $id => $qty) {
-                    $res = $conn->query("SELECT price FROM products WHERE id = " . intval($id));
-                    if ($row = $res->fetch_assoc()) {
-                        $p = floatval($row['price']);
-                        $total += $p * $qty;
-                        $items[] = ['id'=>$id, 'qty'=>$qty, 'price'=>$p];
+                    $id = intval($id); $qty = intval($qty);
+                    $sel->bind_param("i", $id);
+                    $sel->execute();
+                    $row = $sel->get_result()->fetch_assoc();
+                    if (!$row) continue;
+                    // Контроль остатка: нельзя заказать больше, чем есть на складе
+                    if ($qty > intval($row['stock'])) {
+                        throw new RuntimeException(
+                            "Недостаточно книги «{$row['title']}» на складе: осталось "
+                            . intval($row['stock']) . " шт., а в заказе {$qty} шт."
+                        );
                     }
+                    $p = floatval($row['price']);
+                    $total += $p * $qty;
+                    $items[] = ['id' => $id, 'qty' => $qty, 'price' => $p];
                 }
+                $sel->close();
 
                 $uid = $_SESSION['user_id'];
                 $stmt = $conn->prepare("INSERT INTO orders (user_id, total_price) VALUES (?, ?)");
@@ -36,15 +47,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->close();
 
                 $stmt = $conn->prepare("INSERT INTO order_items (order_id, product_id, quantity, price_at_purchase) VALUES (?, ?, ?, ?)");
+                $dec  = $conn->prepare("UPDATE products SET stock = stock - ? WHERE id = ?");
                 foreach ($items as $itm) {
                     $stmt->bind_param("iiid", $oid, $itm['id'], $itm['qty'], $itm['price']);
                     $stmt->execute();
+                    $dec->bind_param("ii", $itm['qty'], $itm['id']); // списываем остаток
+                    $dec->execute();
                 }
-                $stmt->close();
+                $stmt->close(); $dec->close();
                 $conn->commit();
 
                 $_SESSION['cart'] = [];
                 $success = $oid;
+            } catch (RuntimeException $e) {
+                // Нехватка остатка — критическая пользовательская ошибка
+                $conn->rollback();
+                $stockError = $e->getMessage();
             } catch (Exception $e) {
                 $conn->rollback();
                 $error = "Ошибка при оформлении заказа.";
@@ -71,6 +89,12 @@ if (!empty($cart)) {
 }
 
 require_once "includes/header.php";
+
+// Нехватка остатка — критическая ошибка через пользовательский обработчик
+// (выводит блок «Критическая ошибка» и останавливает скрипт).
+if (!empty($stockError)) {
+    @trigger_error($stockError, E_USER_ERROR);
+}
 ?>
 
 <style>

@@ -89,6 +89,18 @@ function ensure_lab4s_tables($conn) {
         $conn->query("ALTER TABLE users ADD COLUMN is_banned TINYINT(1) NOT NULL DEFAULT 0");
     }
 
+    // Остаток книги на складе (для существующих строк ставим 10)
+    $colCheck = $conn->query("SHOW COLUMNS FROM products LIKE 'stock'");
+    if ($colCheck && $colCheck->num_rows === 0) {
+        $conn->query("ALTER TABLE products ADD COLUMN stock INT NOT NULL DEFAULT 10");
+    }
+
+    // Статус заказа: new (новый) / done (выполнен)
+    $colCheck = $conn->query("SHOW COLUMNS FROM orders LIKE 'status'");
+    if ($colCheck && $colCheck->num_rows === 0) {
+        $conn->query("ALTER TABLE orders ADD COLUMN status ENUM('new','done') NOT NULL DEFAULT 'new'");
+    }
+
     // Понижаем обычных админов до пользователей — теперь админ-доступ только у superadmin
     $conn->query("UPDATE users SET role = 'user' WHERE role = 'admin'");
 

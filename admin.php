@@ -149,6 +149,43 @@ if ($tab === 'users' && $_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         } else { $msg = "Проверьте логин и корректность email."; }
     }
+    // Добавление нового пользователя
+    elseif (isset($_POST['action']) && $_POST['action'] === 'add_user') {
+        $login = trim($_POST['login'] ?? '');
+        $email = trim($_POST['email'] ?? '');
+        $pass  = $_POST['password'] ?? '';
+        $role  = ($_POST['role'] ?? 'user') === 'admin' ? 'admin' : 'user';
+        if (strlen($login) < 3 || !preg_match('/^[a-zA-Z0-9_\-]+$/', $login)) {
+            $msg = "Логин: 3+ символов, латиница/цифры/_/-.";
+        } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $msg = "Некорректный e-mail.";
+        } elseif (strlen($pass) < 6) {
+            $msg = "Пароль: минимум 6 символов.";
+        } else {
+            try {
+                $hash = password_hash($pass, PASSWORD_DEFAULT);
+                $reg  = date('Y-m-d');
+                $stmt = $conn->prepare("INSERT INTO users (login, password, reg_date, email, role) VALUES (?, ?, ?, ?, ?)");
+                $stmt->bind_param("sssss", $login, $hash, $reg, $email, $role);
+                $stmt->execute(); $stmt->close();
+                $msg = "Пользователь «{$login}» добавлен.";
+            } catch (mysqli_sql_exception $e) {
+                $msg = ($e->getCode() === 1062)
+                    ? "Логин «{$login}» уже занят."
+                    : "Не удалось добавить пользователя.";
+            }
+        }
+    }
+    // Удаление пользователя (любого, кроме себя и главного админа)
+    elseif (isset($_POST['action']) && $_POST['action'] === 'delete_user') {
+        $uid = intval($_POST['user_id'] ?? 0);
+        if ($uid > 0 && $uid !== intval($_SESSION['user_id'])) {
+            $stmt = $conn->prepare("DELETE FROM users WHERE id = ? AND role != 'superadmin'");
+            $stmt->bind_param("i", $uid); $stmt->execute();
+            $msg = $stmt->affected_rows > 0 ? "Пользователь удалён." : "Этого пользователя удалить нельзя.";
+            $stmt->close();
+        } else { $msg = "Нельзя удалить самого себя."; }
+    }
 }
 
 // ---------- ОБРАБОТКА: ОТЗЫВЫ ----------
@@ -204,6 +241,7 @@ require_once "includes/header.php";
 
 .user-role-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
 .role-superadmin { background: #fdeaea; color: var(--accent); }
+.role-admin { background: #e8f4fd; color: #2980b9; }
 .role-user { background: #f0f0f0; color: var(--muted); }
 .status-active { color: #27ae60; font-weight: bold; }
 .status-banned { color: #e74c3c; font-weight: bold; }
@@ -219,7 +257,13 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
 .order-details.hidden { display: none; }
 .inline-form { display: inline; margin: 0; }
 .mass-bar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; padding: 14px; background: #fdfaf6; border-radius: 8px; margin-bottom: 14px; }
-.order-status { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; margin-left: 8px; }
+.orders-table { width: 100%; border-collapse: collapse; }
+.orders-table th { background: #fdfaf6; padding: 12px 14px; }
+.orders-table td { padding: 12px 14px; vertical-align: middle; }
+.orders-table .ord-main:hover { background: #fdfaf6; }
+.orders-table .ord-main td { border-bottom: 1px solid var(--border); }
+.orders-table .button { margin-left: 4px; }
+.order-status { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
 .st-new { background: #e8f4fd; color: #2980b9; }
 .st-done { background: #e9f7ef; color: #27ae60; }
 .stock-low { color: #e67e22; font-weight: bold; }
@@ -260,7 +304,8 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
         $filterDate = trim($_GET['date'] ?? '');
         $filterUser = intval($_GET['user_id'] ?? 0);
 
-        $sql = "SELECT o.id, o.order_date, o.total_price, o.status, u.login AS client
+        $sql = "SELECT o.id, o.order_date, o.total_price, o.status, u.login AS client,
+                       (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id = o.id) AS items_count
                 FROM orders o JOIN users u ON o.user_id = u.id WHERE 1=1";
         $params = []; $types = "";
         if ($filterDate !== '') { $sql .= " AND DATE(o.order_date) = ?"; $params[] = $filterDate; $types .= "s"; }
@@ -292,62 +337,73 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
     </div>
 
     <?php if ($orders->num_rows > 0): ?>
-        <?php while ($o = $orders->fetch_assoc()): ?>
-        <?php $isDone = ($o['status'] ?? 'new') === 'done'; ?>
-        <div class="order-row">
-            <div>
-                <span class="o-client"><?php echo htmlspecialchars($o['client']); ?></span>
-                <span class="o-meta"> &nbsp;•&nbsp; Заказ #<?php echo $o['id']; ?> &nbsp;•&nbsp; <?php echo date('d.m.Y H:i', strtotime($o['order_date'])); ?></span>
-                <span class="order-status <?php echo $isDone ? 'st-done' : 'st-new'; ?>"><?php echo $isDone ? 'Выполнен' : 'Новый'; ?></span>
-            </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <strong style="margin-right: 6px;"><?php echo number_format($o['total_price'], 0, '', ' '); ?> ₽</strong>
-                <button type="button" class="button btn-sm btn-blue" onclick="toggleOrder(<?php echo $o['id']; ?>)">Подробнее</button>
-                <form method="POST" class="inline-form">
-                    <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
-                    <input type="hidden" name="toggle_status" value="1">
-                    <button type="submit" class="button btn-sm <?php echo $isDone ? 'btn-gray' : 'btn-green'; ?>"><?php echo $isDone ? 'Вернуть в новые' : 'Выполнен'; ?></button>
-                </form>
-                <form method="POST" class="inline-form">
-                    <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
-                    <input type="hidden" name="delete_order" value="1">
-                    <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Удалить заказ #<?php echo $o['id']; ?> целиком?');">Удалить</button>
-                </form>
-            </div>
-        </div>
-        <div class="order-details hidden" id="order-<?php echo $o['id']; ?>">
-            <?php $items = $conn->query("SELECT oi.id, oi.quantity, oi.price_at_purchase, oi.order_id, p.title FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = " . intval($o['id'])); ?>
-            <?php if ($items->num_rows > 0): ?>
-            <table>
-                <tr><th>Товар</th><th>Цена</th><th>Кол-во</th><th>Сумма</th><th>Действие</th></tr>
-                <?php while ($item = $items->fetch_assoc()): ?>
-                <tr>
-                    <td><?php echo htmlspecialchars($item['title']); ?></td>
-                    <td style="white-space: nowrap;"><?php echo number_format($item['price_at_purchase'], 0, '', ' '); ?> ₽</td>
-                    <td>
-                        <form method="POST" class="inline-form" style="display: flex; gap: 6px; align-items: center;">
-                            <input type="hidden" name="order_id" value="<?php echo $item['order_id']; ?>">
-                            <input type="hidden" name="item_id" value="<?php echo $item['id']; ?>">
-                            <input type="number" name="quantity" value="<?php echo $item['quantity']; ?>" min="1" style="width: 60px; margin: 0; padding: 4px 6px;">
-                            <button type="submit" class="button btn-sm">OK</button>
-                        </form>
-                    </td>
-                    <td style="white-space: nowrap;"><?php echo number_format($item['price_at_purchase'] * $item['quantity'], 0, '', ' '); ?> ₽</td>
-                    <td>
-                        <form method="POST" class="inline-form">
-                            <input type="hidden" name="order_id" value="<?php echo $item['order_id']; ?>">
-                            <input type="hidden" name="delete_item" value="<?php echo $item['id']; ?>">
-                            <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Удалить позицию?');">Удалить</button>
-                        </form>
-                    </td>
-                </tr>
-                <?php endwhile; ?>
-            </table>
-            <?php else: ?>
-                <p style="color: var(--muted); margin: 0;">В заказе нет позиций.</p>
-            <?php endif; ?>
-        </div>
-        <?php endwhile; ?>
+    <div class="admin-card" style="padding: 0; overflow: hidden;">
+        <table class="orders-table">
+            <tr>
+                <th>№</th><th>Клиент</th><th>Дата</th><th style="text-align:center;">Позиций</th>
+                <th style="text-align:right;">Сумма</th><th>Статус</th><th style="text-align:right;">Действия</th>
+            </tr>
+            <?php while ($o = $orders->fetch_assoc()):
+                $isDone = ($o['status'] ?? 'new') === 'done';
+            ?>
+            <tr class="ord-main">
+                <td style="font-weight:bold;">#<?php echo $o['id']; ?></td>
+                <td style="font-weight:bold; color: var(--accent);"><?php echo htmlspecialchars($o['client']); ?></td>
+                <td style="white-space:nowrap; color: var(--muted);"><?php echo date('d.m.Y H:i', strtotime($o['order_date'])); ?></td>
+                <td style="text-align:center;"><?php echo intval($o['items_count']); ?></td>
+                <td style="text-align:right; font-weight:bold; white-space:nowrap;"><?php echo number_format($o['total_price'], 0, '', ' '); ?> ₽</td>
+                <td><span class="order-status <?php echo $isDone ? 'st-done' : 'st-new'; ?>"><?php echo $isDone ? 'Выполнен' : 'Новый'; ?></span></td>
+                <td style="text-align:right; white-space:nowrap;">
+                    <button type="button" class="button btn-sm btn-blue" onclick="toggleOrder(<?php echo $o['id']; ?>)">Подробнее</button>
+                    <form method="POST" class="inline-form">
+                        <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
+                        <input type="hidden" name="toggle_status" value="1">
+                        <button type="submit" class="button btn-sm <?php echo $isDone ? 'btn-gray' : 'btn-green'; ?>"><?php echo $isDone ? 'В новые' : 'Выполнен'; ?></button>
+                    </form>
+                    <form method="POST" class="inline-form">
+                        <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
+                        <input type="hidden" name="delete_order" value="1">
+                        <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Удалить заказ #<?php echo $o['id']; ?> целиком?');">Удалить</button>
+                    </form>
+                </td>
+            </tr>
+            <tr class="order-details hidden" id="order-<?php echo $o['id']; ?>">
+                <td colspan="7" style="background:#fdfaf6;">
+                    <?php $items = $conn->query("SELECT oi.id, oi.quantity, oi.price_at_purchase, oi.order_id, p.title FROM order_items oi JOIN products p ON oi.product_id = p.id WHERE oi.order_id = " . intval($o['id'])); ?>
+                    <?php if ($items->num_rows > 0): ?>
+                    <table style="margin:0;">
+                        <tr><th>Товар</th><th>Цена</th><th>Кол-во</th><th>Сумма</th><th>Действие</th></tr>
+                        <?php while ($item = $items->fetch_assoc()): ?>
+                        <tr>
+                            <td><?php echo htmlspecialchars($item['title']); ?></td>
+                            <td style="white-space:nowrap;"><?php echo number_format($item['price_at_purchase'], 0, '', ' '); ?> ₽</td>
+                            <td>
+                                <form method="POST" class="inline-form" style="display:flex; gap:6px; align-items:center;">
+                                    <input type="hidden" name="order_id" value="<?php echo $item['order_id']; ?>">
+                                    <input type="hidden" name="item_id" value="<?php echo $item['id']; ?>">
+                                    <input type="number" name="quantity" value="<?php echo $item['quantity']; ?>" min="1" style="width:60px; margin:0; padding:4px 6px;">
+                                    <button type="submit" class="button btn-sm">OK</button>
+                                </form>
+                            </td>
+                            <td style="white-space:nowrap;"><?php echo number_format($item['price_at_purchase'] * $item['quantity'], 0, '', ' '); ?> ₽</td>
+                            <td>
+                                <form method="POST" class="inline-form">
+                                    <input type="hidden" name="order_id" value="<?php echo $item['order_id']; ?>">
+                                    <input type="hidden" name="delete_item" value="<?php echo $item['id']; ?>">
+                                    <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Удалить позицию?');">Удалить</button>
+                                </form>
+                            </td>
+                        </tr>
+                        <?php endwhile; ?>
+                    </table>
+                    <?php else: ?>
+                        <p style="color: var(--muted); margin: 0;">В заказе нет позиций.</p>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php endwhile; ?>
+        </table>
+    </div>
     <?php else: ?>
         <div class="admin-card" style="text-align: center; color: var(--muted); padding: 40px;">
             <p style="font-size: 40px; margin: 0 0 10px;">📋</p>
@@ -520,6 +576,25 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
     </div>
     <?php endif; ?>
 
+    <!-- Добавить пользователя -->
+    <div class="admin-card">
+        <h3>Добавить пользователя</h3>
+        <form method="POST" style="display: grid; grid-template-columns: 1fr 1fr 1fr auto auto; gap: 12px; align-items: flex-end;">
+            <input type="hidden" name="action" value="add_user">
+            <div><label>Логин</label><input type="text" name="login" required></div>
+            <div><label>E-mail</label><input type="email" name="email" required></div>
+            <div><label>Пароль</label><input type="text" name="password" required></div>
+            <div>
+                <label>Роль</label>
+                <select name="role" style="width: 130px;">
+                    <option value="user">Пользователь</option>
+                    <option value="admin">Админ</option>
+                </select>
+            </div>
+            <div><button type="submit" class="button">Добавить</button></div>
+        </form>
+    </div>
+
     <div class="admin-card">
         <h3>Управление пользователями</h3>
         <table>
@@ -532,6 +607,8 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
                 <td>
                     <?php if ($u['role'] === 'superadmin'): ?>
                         <span class="user-role-badge role-superadmin">Главный админ</span>
+                    <?php elseif ($u['role'] === 'admin'): ?>
+                        <span class="user-role-badge role-admin">Админ</span>
                     <?php else: ?>
                         <span class="user-role-badge role-user">Пользователь</span>
                     <?php endif; ?>
@@ -555,6 +632,11 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
                             <?php else: ?>
                                 <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Заблокировать пользователя?');">Забанить</button>
                             <?php endif; ?>
+                        </form>
+                        <form method="POST" class="inline-form">
+                            <input type="hidden" name="action" value="delete_user">
+                            <input type="hidden" name="user_id" value="<?php echo $u['id']; ?>">
+                            <button type="submit" class="button btn-sm btn-danger" onclick="return confirm('Удалить пользователя «<?php echo htmlspecialchars($u['login'], ENT_QUOTES); ?>» и все его заказы?');">Удалить</button>
                         </form>
                     <?php else: ?>
                         <span style="color: var(--muted);">—</span>

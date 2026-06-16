@@ -101,9 +101,6 @@ function ensure_lab4s_tables($conn) {
         $conn->query("ALTER TABLE orders ADD COLUMN status ENUM('new','done') NOT NULL DEFAULT 'new'");
     }
 
-    // Понижаем обычных админов до пользователей — теперь админ-доступ только у superadmin
-    $conn->query("UPDATE users SET role = 'user' WHERE role = 'admin'");
-
     // Создаём главного админа если нет ни одного superadmin
     $saCheck = $conn->query("SELECT COUNT(*) as c FROM users WHERE role = 'superadmin'");
     $saRow = $saCheck->fetch_assoc();

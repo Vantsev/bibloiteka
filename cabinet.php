@@ -231,8 +231,12 @@ require_once "includes/header.php";
                 <div class="order-item">
                     <div class="order-top">
                         <span class="order-id">Заказ #<?php echo $o['id']; ?>
-                            <?php $isDone = ($o['status'] ?? 'new') === 'done'; ?>
-                            <span style="display:inline-block; padding:2px 10px; border-radius:12px; font-size:11px; font-weight:bold; margin-left:6px; <?php echo $isDone ? 'background:#e9f7ef; color:#27ae60;' : 'background:#e8f4fd; color:#2980b9;'; ?>"><?php echo $isDone ? 'Выполнен' : 'Новый'; ?></span>
+                            <?php
+                                $st = $o['status'] ?? 'new';
+                                $stStyle = ['new' => 'background:#e8f4fd; color:#2980b9;', 'done' => 'background:#e9f7ef; color:#27ae60;', 'cancelled' => 'background:#fdecea; color:#e74c3c;'];
+                                $stText  = ['new' => 'Новый', 'done' => 'Выполнен', 'cancelled' => 'Отменён'];
+                            ?>
+                            <span style="display:inline-block; padding:2px 10px; border-radius:12px; font-size:11px; font-weight:bold; margin-left:6px; <?php echo $stStyle[$st] ?? $stStyle['new']; ?>"><?php echo $stText[$st] ?? 'Новый'; ?></span>
                         </span>
                         <span class="order-date"><?php echo date('d.m.Y H:i', strtotime($o['order_date'])); ?></span>
                     </div>

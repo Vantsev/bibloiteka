@@ -20,10 +20,14 @@ if ($tab === 'orders' && $_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['
         $stmt = $conn->prepare("DELETE FROM orders WHERE id = ?");
         $stmt->bind_param("i", $orderId); $stmt->execute(); $stmt->close();
         $msg = "Заказ #{$orderId} удалён.";
-    } elseif (isset($_POST['toggle_status'])) {
-        $stmt = $conn->prepare("UPDATE orders SET status = IF(status='new','done','new') WHERE id = ?");
-        $stmt->bind_param("i", $orderId); $stmt->execute(); $stmt->close();
-        $msg = "Статус заказа #{$orderId} изменён.";
+    } elseif (isset($_POST['set_status'])) {
+        $newStatus = $_POST['set_status'];
+        if (in_array($newStatus, ['new', 'done', 'cancelled'], true)) {
+            $stmt = $conn->prepare("UPDATE orders SET status = ? WHERE id = ?");
+            $stmt->bind_param("si", $newStatus, $orderId); $stmt->execute(); $stmt->close();
+            $labels = ['new' => 'Новый', 'done' => 'Выполнен', 'cancelled' => 'Отменён'];
+            $msg = "Заказ #{$orderId}: статус «{$labels[$newStatus]}».";
+        }
     } elseif (isset($_POST['delete_item'])) {
         $delItem = intval($_POST['delete_item']);
         $stmt = $conn->prepare("DELETE FROM order_items WHERE id = ?");
@@ -266,6 +270,8 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
 .order-status { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
 .st-new { background: #e8f4fd; color: #2980b9; }
 .st-done { background: #e9f7ef; color: #27ae60; }
+.st-cancelled { background: #fdecea; color: #e74c3c; }
+.btn-orange { background: #e67e22; } .btn-orange:hover { background: #ca6f1e; }
 .stock-low { color: #e67e22; font-weight: bold; }
 .stock-zero { color: #e74c3c; font-weight: bold; }
 </style>
@@ -344,7 +350,9 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
                 <th style="text-align:right;">Сумма</th><th>Статус</th><th style="text-align:right;">Действия</th>
             </tr>
             <?php while ($o = $orders->fetch_assoc()):
-                $isDone = ($o['status'] ?? 'new') === 'done';
+                $st = $o['status'] ?? 'new';
+                $stMap = ['new' => ['Новый','st-new'], 'done' => ['Выполнен','st-done'], 'cancelled' => ['Отменён','st-cancelled']];
+                [$stLabel, $stClass] = $stMap[$st] ?? $stMap['new'];
             ?>
             <tr class="ord-main">
                 <td style="font-weight:bold;">#<?php echo $o['id']; ?></td>
@@ -352,14 +360,30 @@ table th { font-size: 12px; text-transform: uppercase; letter-spacing: 0.3px; co
                 <td style="white-space:nowrap; color: var(--muted);"><?php echo date('d.m.Y H:i', strtotime($o['order_date'])); ?></td>
                 <td style="text-align:center;"><?php echo intval($o['items_count']); ?></td>
                 <td style="text-align:right; font-weight:bold; white-space:nowrap;"><?php echo number_format($o['total_price'], 0, '', ' '); ?> ₽</td>
-                <td><span class="order-status <?php echo $isDone ? 'st-done' : 'st-new'; ?>"><?php echo $isDone ? 'Выполнен' : 'Новый'; ?></span></td>
+                <td><span class="order-status <?php echo $stClass; ?>"><?php echo $stLabel; ?></span></td>
                 <td style="text-align:right; white-space:nowrap;">
                     <button type="button" class="button btn-sm btn-blue" onclick="toggleOrder(<?php echo $o['id']; ?>)">Подробнее</button>
+                    <?php if ($st !== 'done'): ?>
                     <form method="POST" class="inline-form">
                         <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
-                        <input type="hidden" name="toggle_status" value="1">
-                        <button type="submit" class="button btn-sm <?php echo $isDone ? 'btn-gray' : 'btn-green'; ?>"><?php echo $isDone ? 'В новые' : 'Выполнен'; ?></button>
+                        <input type="hidden" name="set_status" value="done">
+                        <button type="submit" class="button btn-sm btn-green">Выполнен</button>
                     </form>
+                    <?php endif; ?>
+                    <?php if ($st !== 'new'): ?>
+                    <form method="POST" class="inline-form">
+                        <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
+                        <input type="hidden" name="set_status" value="new">
+                        <button type="submit" class="button btn-sm btn-gray">В новые</button>
+                    </form>
+                    <?php endif; ?>
+                    <?php if ($st !== 'cancelled'): ?>
+                    <form method="POST" class="inline-form">
+                        <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
+                        <input type="hidden" name="set_status" value="cancelled">
+                        <button type="submit" class="button btn-sm btn-orange" onclick="return confirm('Отменить заказ #<?php echo $o['id']; ?>?');">Отменить</button>
+                    </form>
+                    <?php endif; ?>
                     <form method="POST" class="inline-form">
                         <input type="hidden" name="order_id" value="<?php echo $o['id']; ?>">
                         <input type="hidden" name="delete_order" value="1">
